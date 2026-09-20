@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.19.0
+      - name: Install pnpm
+        run: npm install --global pnpm@11.25.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Test detector and MIDI engine
+        run: node --experimental-strip-types --test tests/tracker.test.mjs tests/midi.test.mjs
+      - name: Type-check
+        run: pnpm exec tsc --noEmit
+      - name: Build web app
+        run: pnpm build
+
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install JUCE build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          cmake ninja-build pkg-config g++
+          libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev
+          libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          libgl-dev
+      - name: Configure native targets
+        run: cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build VST3, standalone, and tests
+        run: cmake --build build/native --parallel 2
+      - name: Run native tests
+        run: ctest --test-dir build/native --output-on-failure
+      - name: Validate VST3 bundle
+        run: |
+          test -f build/native/Humline_artefacts/Release/VST3/Humline.vst3/Contents/x86_64-linux/Humline.so
+          test -f build/native/Humline_artefacts/Release/VST3/Humline.vst3/Contents/Resources/moduleinfo.json
+          nm -D build/native/Humline_artefacts/Release/VST3/Humline.vst3/Contents/x86_64-linux/Humline.so | grep -q GetPluginFactory
